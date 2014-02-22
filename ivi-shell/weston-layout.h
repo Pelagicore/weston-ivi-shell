@@ -20,6 +20,28 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+/**
+ * The weston-layout library supports API set of controlling properties of
+ * surface and layer which groups surfaces. An unique ID whose type is integer
+ * is required to create surface and layer. With the unique ID, surface and
+ * layer are identified to control them. The API set consists of APIs to control
+ * properties of surface and layers about followings,
+ * - visibility.
+ * - opacity.
+ * - clipping (x,y,width,height).
+ * - position and size of it to be displayed.
+ * - orientation per 90 degree.
+ * - add or remove surfaces to a layer.
+ * - order of surfaces/layers in layer/screen to be displayed.
+ * - commit to apply property changes.
+ * - notifications of property change.
+ *
+ * Management of surfaces and layers grouping these surfaces are common way in
+ * In-Vehicle Infotainment system, which integrate several domains in one system.
+ * A layer is allocated to a domain in order to control application surfaces
+ * grouped to the layer all together.
+ */
+
 #ifndef _WESTON_LAYOUT_H_
 #define _WESTON_LAYOUT_H_
 
@@ -128,7 +150,8 @@ typedef void(*surfaceConfigureNotificationFunc)(struct weston_layout_surface *iv
                                             void *userdata);
 
 /**
- * \brief initialize weston-layout
+ * \brief to be called by ivi-shell in order to set initail view of
+ * weston_surface.
  */
 struct weston_view *
 weston_layout_get_weston_view(struct weston_layout_surface *surface);

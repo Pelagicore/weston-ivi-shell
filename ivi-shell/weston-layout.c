@@ -20,6 +20,30 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+/**
+ * Implementation of weston-layout library. The actual view on screen is
+ * not updated till calling weston_layout_commitChanges. A overview from
+ * calling API for updating properties of surfaces/layer to asking compositor
+ * to compose them by using weston_compositor_schedule_repaint,
+ * 0/ initialize this library by weston_layout_initWithCompositor
+ *    with (struct weston_compositor *ec) from ivi-shell.
+ * 1/ When a API for updating properties of surface/layer, it updates
+ *    pending prop of weston_layout_surface/layer/screen which are structure to
+ *    store properties.
+ * 2/ Before calling commitChanges, in case of calling a API to get a property,
+ *    return current property, not pending property.
+ * 3/ At the timing of calling weston_layout_commitChanges, pending properties
+ *    are applied
+ *    to properties.
+ * 4/ According properties, set transformation by using weston_matrix and
+ *    weston_view per surfaces and layers in while loop.
+ * 5/ Set damage and trigger transform by using weston_view_geometry_dirty and
+ *    weston_view_geometry_dirty.
+ * 6/ Notify update of properties.
+ * 7/ Trigger composition by weston_compositor_schedule_repaint.
+ *
+ */
+
 #include <sys/wait.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -203,6 +227,15 @@ struct weston_layout {
 
 struct weston_layout ivilayout = {0};
 
+static struct weston_layout *
+get_instance(void)
+{
+    return &ivilayout;
+}
+
+/**
+ * Internal API to add/remove a surface from layer.
+ */
 static void
 add_ordersurface_to_layer(struct weston_layout_surface *ivisurf,
                           struct weston_layout_layer *ivilayer)
@@ -236,6 +269,9 @@ remove_ordersurface_from_layer(struct weston_layout_surface *ivisurf)
     wl_list_init(&ivisurf->list_layer);
 }
 
+/**
+ * Internal API to add/remove a layer from screen.
+ */
 static void
 add_orderlayer_to_screen(struct weston_layout_layer *ivilayer,
                          struct weston_layout_screen *iviscrn)
@@ -269,6 +305,9 @@ remove_orderlayer_from_screen(struct weston_layout_layer *ivilayer)
     wl_list_init(&ivilayer->list_screen);
 }
 
+/**
+ * Internal API to add/remove a layer from screen.
+ */
 static struct weston_layout_surface *
 get_surface(struct wl_list *list_surf, uint32_t id_surface)
 {
@@ -297,6 +336,94 @@ get_layer(struct wl_list *list_layer, uint32_t id_layer)
     return NULL;
 }
 
+/**
+ * Called at destruction of ivi_surface
+ */
+static void
+westonsurface_destroy_from_ivisurface(struct wl_listener *listener, void *data)
+{
+    struct weston_layout_surface *ivisurf = NULL;
+
+    ivisurf = container_of(listener, struct weston_layout_surface,
+                           surface_destroy_listener);
+    ivisurf->surface = NULL;
+}
+
+/**
+ * Internal API to check layer/surface already added in layer/screen.
+ * Called by weston_layout_layerAddSurface/weston_layout_screenAddLayer
+ */
+static int
+is_surface_in_layer(struct weston_layout_surface *ivisurf,
+                    struct weston_layout_layer *ivilayer)
+{
+    struct weston_layout_surface *surf = NULL;
+
+    wl_list_for_each(surf, &ivilayer->pending.list_surface, pending.link) {
+        if (surf->id_surface == ivisurf->id_surface) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int
+is_layer_in_screen(struct weston_layout_layer *ivilayer,
+                    struct weston_layout_screen *iviscrn)
+{
+    struct weston_layout_layer *layer = NULL;
+
+    wl_list_for_each(layer, &iviscrn->pending.list_layer, pending.link) {
+        if (layer->id_layer == ivilayer->id_layer) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * Internal API to initialize screens found from output_list of weston_compositor.
+ * Called by weston_layout_initWithCompositor.
+ */
+static void
+create_screen(struct weston_compositor *ec)
+{
+    struct weston_layout *layout = get_instance();
+    struct weston_layout_screen *iviscrn = NULL;
+    struct weston_output *output = NULL;
+    int32_t count = 0;
+
+    wl_list_for_each(output, &ec->output_list, link) {
+        iviscrn = calloc(1, sizeof *iviscrn);
+        if (iviscrn == NULL) {
+            weston_log("fails to allocate memory\n");
+            continue;
+        }
+
+        wl_list_init(&iviscrn->link);
+        iviscrn->layout = layout;
+
+        iviscrn->id_screen = count;
+        count++;
+
+        iviscrn->output = output;
+        iviscrn->event_mask = 0;
+
+        wl_list_init(&iviscrn->pending.list_layer);
+        wl_list_init(&iviscrn->pending.link);
+
+        wl_list_init(&iviscrn->order.list_layer);
+        wl_list_init(&iviscrn->order.link);
+
+        wl_list_insert(&layout->list_screen, &iviscrn->link);
+    }
+}
+
+/**
+ * Internal APIs to initialize properties of surface/layer when they are created.
+ */
 static void
 init_layerProperties(struct weston_layout_LayerProperties *prop,
                      int32_t width, int32_t height)
@@ -316,6 +443,9 @@ init_surfaceProperties(struct weston_layout_SurfaceProperties *prop)
     prop->opacity = wl_fixed_from_double(1.0);
 }
 
+/**
+ * Internal APIs to be called from weston_layout_commitChanges.
+ */
 static void
 update_opacity(struct weston_layout_layer *ivilayer,
                struct weston_layout_surface *ivisurf)
@@ -593,34 +723,6 @@ update_prop(struct weston_layout_layer *ivilayer,
 }
 
 static void
-send_surface_prop(struct weston_layout_surface *ivisurf)
-{
-    struct link_surfacePropertyNotification *notification = NULL;
-
-    wl_list_for_each(notification, &ivisurf->list_notification, link) {
-        notification->callback(ivisurf, &ivisurf->prop,
-                               ivisurf->event_mask,
-                               notification->userdata);
-    }
-
-    ivisurf->event_mask = 0;
-}
-
-static void
-send_layer_prop(struct weston_layout_layer *ivilayer)
-{
-    struct link_layerPropertyNotification *notification = NULL;
-
-    wl_list_for_each(notification, &ivilayer->list_notification, link) {
-        notification->callback(ivilayer, &ivilayer->prop,
-                               ivilayer->event_mask,
-                               notification->userdata);
-    }
-
-    ivilayer->event_mask = 0;
-}
-
-static void
 commit_changes(struct weston_layout *layout)
 {
     struct weston_layout_screen  *iviscrn  = NULL;
@@ -634,51 +736,6 @@ commit_changes(struct weston_layout *layout)
             }
         }
     }
-}
-
-static void
-send_prop(struct weston_layout *layout)
-{
-    struct weston_layout_layer   *ivilayer = NULL;
-    struct weston_layout_surface *ivisurf  = NULL;
-
-    wl_list_for_each(ivilayer, &layout->list_layer, link) {
-        send_layer_prop(ivilayer);
-    }
-
-    wl_list_for_each(ivisurf, &layout->list_surface, link) {
-        send_surface_prop(ivisurf);
-    }
-}
-
-static int
-is_surface_in_layer(struct weston_layout_surface *ivisurf,
-                    struct weston_layout_layer *ivilayer)
-{
-    struct weston_layout_surface *surf = NULL;
-
-    wl_list_for_each(surf, &ivilayer->pending.list_surface, pending.link) {
-        if (surf->id_surface == ivisurf->id_surface) {
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
-static int
-is_layer_in_screen(struct weston_layout_layer *ivilayer,
-                    struct weston_layout_screen *iviscrn)
-{
-    struct weston_layout_layer *layer = NULL;
-
-    wl_list_for_each(layer, &iviscrn->pending.list_layer, pending.link) {
-        if (layer->id_layer == ivilayer->id_layer) {
-            return 1;
-        }
-    }
-
-    return 0;
 }
 
 static void
@@ -788,55 +845,52 @@ commit_list_screen(struct weston_layout *layout)
 }
 
 static void
-westonsurface_destroy_from_ivisurface(struct wl_listener *listener, void *data)
+send_surface_prop(struct weston_layout_surface *ivisurf)
 {
-    struct weston_layout_surface *ivisurf = NULL;
+    struct link_surfacePropertyNotification *notification = NULL;
 
-    ivisurf = container_of(listener, struct weston_layout_surface,
-                           surface_destroy_listener);
-    ivisurf->surface = NULL;
-}
+    wl_list_for_each(notification, &ivisurf->list_notification, link) {
+        notification->callback(ivisurf, &ivisurf->prop,
+                               ivisurf->event_mask,
+                               notification->userdata);
+    }
 
-static struct weston_layout *
-get_instance(void)
-{
-    return &ivilayout;
+    ivisurf->event_mask = 0;
 }
 
 static void
-create_screen(struct weston_compositor *ec)
+send_layer_prop(struct weston_layout_layer *ivilayer)
 {
-    struct weston_layout *layout = get_instance();
-    struct weston_layout_screen *iviscrn = NULL;
-    struct weston_output *output = NULL;
-    int32_t count = 0;
+    struct link_layerPropertyNotification *notification = NULL;
 
-    wl_list_for_each(output, &ec->output_list, link) {
-        iviscrn = calloc(1, sizeof *iviscrn);
-        if (iviscrn == NULL) {
-            weston_log("fails to allocate memory\n");
-            continue;
-        }
+    wl_list_for_each(notification, &ivilayer->list_notification, link) {
+        notification->callback(ivilayer, &ivilayer->prop,
+                               ivilayer->event_mask,
+                               notification->userdata);
+    }
 
-        wl_list_init(&iviscrn->link);
-        iviscrn->layout = layout;
+    ivilayer->event_mask = 0;
+}
 
-        iviscrn->id_screen = count;
-        count++;
+static void
+send_prop(struct weston_layout *layout)
+{
+    struct weston_layout_layer   *ivilayer = NULL;
+    struct weston_layout_surface *ivisurf  = NULL;
 
-        iviscrn->output = output;
-        iviscrn->event_mask = 0;
+    wl_list_for_each(ivilayer, &layout->list_layer, link) {
+        send_layer_prop(ivilayer);
+    }
 
-        wl_list_init(&iviscrn->pending.list_layer);
-        wl_list_init(&iviscrn->pending.link);
-
-        wl_list_init(&iviscrn->order.list_layer);
-        wl_list_init(&iviscrn->order.link);
-
-        wl_list_insert(&layout->list_screen, &iviscrn->link);
+    wl_list_for_each(ivisurf, &layout->list_surface, link) {
+        send_surface_prop(ivisurf);
     }
 }
 
+/**
+ * Exported APIs of weston-layout library are implemented from here.
+ * Brief of APIs is described in weston-layout.h.
+ */
 WL_EXPORT struct weston_view *
 weston_layout_get_weston_view(struct weston_layout_surface *surface)
 {
@@ -2192,7 +2246,7 @@ weston_layout_screenAddLayer(struct weston_layout_screen *iviscrn,
 
     is_layer_in_scrn = is_layer_in_screen(addlayer, iviscrn);
     if (is_layer_in_scrn == 1) {
-        weston_log("weston_layout_screenAddLayer: addlayer is allready available\n");
+        weston_log("weston_layout_screenAddLayer: addlayer is already available\n");
         return 0;
     }
 
@@ -2473,7 +2527,7 @@ weston_layout_layerAddSurface(struct weston_layout_layer *ivilayer,
 
     is_surf_in_layer = is_surface_in_layer(addsurf, ivilayer);
     if (is_surf_in_layer == 1) {
-        weston_log("weston_layout_layerAddSurface: addsurf is allready available\n");
+        weston_log("weston_layout_layerAddSurface: addsurf is already available\n");
         return 0;
     }
 
