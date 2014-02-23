@@ -20,6 +20,18 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+
+/**
+ * ivi-shell supports a type of shell for In-Vehicle Infotainment system.
+ * In-Vehicle Infotainment system traditionally manages surfaces with global
+ * identification. A protocol, ivi_application, supports such a feature
+ * by implementing a request, ivi_application::surface_creation defined in
+ * ivi_application.xml.
+ *
+ * Additionally, it initialize a library, weston-layout, to manage properties of
+ * surfaces and group surfaces in layer. In detail, refer weston_layout.
+ */
+
 #include <sys/wait.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -601,6 +613,11 @@ is_surf_in_surfaces(struct wl_list *list_surf, uint32_t id_surface)
     return NULL;
 }
 
+/**
+ * Implementation of ivi_application::surface_create.
+ * Creating new ivi_shell_surface with identification to identify the surface
+ * in the system.
+ */
 static void
 application_surface_create(struct wl_client   *client,
                            struct wl_resource *resource,
@@ -693,6 +710,9 @@ bind_ivi_application(struct wl_client *client,
                                    shell, NULL);
 }
 
+/**
+ * Initialization/destruction method of ivi-shell
+ */
 static void
 shell_destroy(struct wl_listener *listener, void *data)
 {
@@ -714,9 +734,11 @@ init_ivi_shell(struct weston_compositor *ec, struct ivi_shell *shell)
     wl_list_init(&shell->list_weston_surface);
 }
 
-/* ------------------------------------------------------------------------- */
-/* export functions                                                          */
-/* ------------------------------------------------------------------------- */
+/**
+ * Initialization of ivi-shell. A library, weston_layout, is also initialized
+ * here by calling weston_layout_initWithCompositor.
+ *
+ */
 
 WL_EXPORT int
 module_init(struct weston_compositor *ec,
